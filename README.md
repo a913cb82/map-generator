@@ -7,21 +7,22 @@ A Python script to generate full world maps by stitching together map tiles from
 1. Ensure you have a `.env` file with your `GOOGLE_MAPS_API_KEY` (if using Google Maps layers).
 2. Install dependencies:
    ```bash
-   pip install requests Pillow python-dotenv
+   pip install requests Pillow python-dotenv numpy
    ```
 
 ## Usage
 
-Run the script with the desired zoom level and map type.
+Run the script with the desired zoom level, map type, and projection.
 
 ```bash
-python generate_map.py <zoom_level> --map <map_type> --output <filename>
+python generate_map.py <zoom_level> --map <map_type> --projection <projection> --output <filename>
 ```
 
 ### Arguments
 
 - `zoom`: The zoom level (e.g., 0 for a single tile, 1 for 2x2, 2 for 4x4, etc.)
-- `--map`: The map provider to use. Use `--help` to see all available types (esri, osm, google_maps, etc.)
+- `--map`: The map provider to use. Use `--help` to see all available types.
+- `--projection`: The map projection to use. Use `--help` to see all available projections.
 - `--output`: The filename for the resulting `.png` (Default: `world_map.png`)
 
 ### Examples
@@ -34,4 +35,7 @@ python generate_map.py 2 --map esri
 
 # Generate an OSM map at zoom 3
 python generate_map.py 3 --map osm
+
+# Generate an equirectangular map
+python generate_map.py 2 --projection equirectangular
 ```
