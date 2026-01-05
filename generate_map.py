@@ -53,29 +53,115 @@ def reproject_to_equirectangular(mercator_image):
     
     # Precompute y-mapping
     # Equirectangular y goes from -pi/2 to pi/2 (normalized to out_h)
-    # Mercator y goes from -max_lat_rad to max_lat_rad (normalized to h)
-    
     lats = np.linspace(math.pi / 2, -math.pi / 2, out_h)
     
-    # Mercator formula: y = ln(tan(pi/4 + lat/2))
-    # We clip to max_lat_rad because Mercator is undefined at poles
-    clipped_lats = np.clip(lats, -max_lat_rad, max_lat_rad)
-    merc_y = np.log(np.tan(math.pi / 4 + clipped_lats / 2))
+    # Map lon/lat to Mercator pixels
+    valid_mask = np.abs(lats) <= max_lat_rad
     
-    # Map merc_y (from -pi to pi) to input pixel coordinates (from h-1 to 0)
-    # Note: merc_y = pi is top (y=0), merc_y = -pi is bottom (y=h-1)
-    input_y = ((math.pi - merc_y) / (2 * math.pi) * (h - 1)).astype(int)
+    # Clip lat to avoid log(tan(0 or pi/2)) errors
+    safe_lat = np.clip(lats, -max_lat_rad, max_lat_rad)
+    merc_y = np.log(np.tan(math.pi / 4 + safe_lat / 2))
     
-    # X mapping is linear (both are longitude)
-    input_x = np.arange(out_w)
+    # Map merc_y to input pixel coordinates
+    input_y_vals = ((math.pi - merc_y) / (2 * math.pi) * (h - 1)).astype(int)
+    # longitude is linear in both
+    input_x_vals = np.arange(out_w)
     
     # Fill output
     for y in range(out_h):
-        # Fill black if outside Mercator range (poles)
-        if abs(lats[y]) > max_lat_rad:
+        if not valid_mask[y]:
             continue
-        output_arr[y, :, :] = input_arr[input_y[y], input_x, :]
+        output_arr[y, :, :] = input_arr[input_y_vals[y], input_x_vals, :]
         
+    return Image.fromarray(output_arr)
+
+def reproject_to_winkel_tripel(mercator_image):
+    """
+    Reproject a Mercator image to Winkel Tripel.
+    Winkel Tripel is the arithmetic mean of Equirectangular and Aitoff.
+    """
+    w, h = mercator_image.size
+    # Aspect ratio of Winkel Tripel is roughly 1.636
+    out_w = w
+    out_h = int(w / 1.636)
+    
+    input_arr = np.array(mercator_image)
+    output_arr = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+    
+    phi1 = math.acos(2.0 / math.pi)
+    max_lat_rad = math.atan(math.sinh(math.pi))
+    
+    # Target grid in normalized coordinates
+    # Winkel Tripel bounds: x in [-(1+pi/2), (1+pi/2)], y in [-pi/2, pi/2]
+    x_max = 1.0 + math.pi / 2.0
+    y_max = math.pi / 2.0
+    
+    x_coords = np.linspace(-x_max, x_max, out_w)
+    y_coords = np.linspace(y_max, -y_max, out_h)
+    xv, yv = np.meshgrid(x_coords, y_coords)
+    
+    # Iterative inverse
+    # Initial guess: Equirectangular
+    lon = xv / math.cos(phi1)
+    lat = yv
+    
+    def forward(lons, lats):
+        alpha = np.arccos(np.clip(np.cos(lats) * np.cos(lons / 2.0), -1, 1))
+        # sinc(alpha) = sin(alpha)/alpha
+        # we need alpha/sin(alpha)
+        sinc_inv = np.ones_like(alpha)
+        mask = np.abs(alpha) > 1e-8
+        sinc_inv[mask] = alpha[mask] / np.sin(alpha[mask])
+        
+        fx = 0.5 * (lons * math.cos(phi1) + (2.0 * np.cos(lats) * np.sin(lons / 2.0)) * sinc_inv)
+        fy = 0.5 * (lats + np.sin(lats) * sinc_inv)
+        return fx, fy
+
+    # 5 iterations of Newton's method is usually plenty for this projection
+    for _ in range(5):
+        cx, cy = forward(lon, lat)
+        
+        # Numerical Jacobian
+        delta = 1e-6
+        x_dlon, y_dlon = forward(lon + delta, lat)
+        x_dlat, y_dlat = forward(lon, lat + delta)
+        
+        dx_dlon = (x_dlon - cx) / delta
+        dx_dlat = (x_dlat - cx) / delta
+        dy_dlon = (y_dlon - cy) / delta
+        dy_dlat = (y_dlat - cy) / delta
+        
+        det = dx_dlon * dy_dlat - dx_dlat * dy_dlon
+        err_x = cx - xv
+        err_y = cy - yv
+        
+        lon -= (err_x * dy_dlat - err_y * dx_dlat) / det
+        lat -= (err_y * dx_dlon - err_x * dy_dlon) / det
+        
+        lon = np.clip(lon, -math.pi, math.pi)
+        lat = np.clip(lat, -math.pi/2, math.pi/2)
+
+    # Map lon/lat to Mercator pixels
+    # lon is in [-pi, pi], lat is in [-max_lat_rad, max_lat_rad]
+    valid_mask = np.abs(lat) <= max_lat_rad
+    
+    # Clip lat to avoid log(tan(0 or pi/2)) errors
+    safe_lat = np.clip(lat, -max_lat_rad, max_lat_rad)
+    merc_y = np.log(np.tan(math.pi / 4.0 + safe_lat / 2.0))
+    
+    input_y = np.zeros_like(merc_y, dtype=int)
+    input_x = np.zeros_like(lon, dtype=int)
+    
+    input_y[valid_mask] = ((math.pi - merc_y[valid_mask]) / (2.0 * math.pi) * (h - 1)).astype(int)
+    input_x[valid_mask] = ((lon[valid_mask] + math.pi) / (2.0 * math.pi) * (w - 1)).astype(int)
+    
+    # Clip to be safe
+    input_y = np.clip(input_y, 0, h - 1)
+    input_x = np.clip(input_x, 0, w - 1)
+    
+    # Vectorized fill
+    output_arr[valid_mask] = input_arr[input_y[valid_mask], input_x[valid_mask]]
+    
     return Image.fromarray(output_arr)
 
 def generate_map(zoom, map_type, projection, output_file):
@@ -110,13 +196,16 @@ def generate_map(zoom, map_type, projection, output_file):
     if projection == "equirectangular":
         print("Reprojecting to Equirectangular...")
         canvas = reproject_to_equirectangular(canvas)
+    elif projection == "winkel_tripel":
+        print("Reprojecting to Winkel Tripel...")
+        canvas = reproject_to_winkel_tripel(canvas)
 
     canvas.save(output_file)
     print(f"Map saved to {output_file}")
 
 if __name__ == "__main__":
     map_choices = list(MAP_TEMPLATES.keys())
-    proj_choices = ["mercator", "equirectangular"]
+    proj_choices = ["mercator", "equirectangular", "winkel_tripel"]
     epilog_examples = "\n".join([f"  python generate_map.py 2 --map {m}" for m in map_choices[:2]])
     
     parser = argparse.ArgumentParser(
