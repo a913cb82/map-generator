@@ -11,29 +11,27 @@ from generate_map import download_tile, reproject_to_equirectangular, reproject_
 
 class TestMapGenerator(unittest.TestCase):
 
-    @patch('requests.get')
-    def test_download_tile_success(self, mock_get):
+    @patch('generate_map.download_tile_content')
+    def test_download_tile_success(self, mock_content):
         # Create a small dummy image
         img = Image.new('RGB', (256, 256), color='red')
         img_byte_arr = BytesIO()
         img.save(img_byte_arr, format='PNG')
         img_byte_arr = img_byte_arr.getvalue()
 
-        # Mock response
-        mock_response = MagicMock()
-        mock_response.content = img_byte_arr
-        mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
+        # Mock cached content
+        mock_content.return_value = img_byte_arr
 
         result = download_tile("http://example.com/tile.png")
         
         self.assertIsNotNone(result)
         self.assertEqual(result.size, (256, 256))
-        mock_get.assert_called_once()
+        mock_content.assert_called_once_with("http://example.com/tile.png")
 
-    @patch('requests.get')
-    def test_download_tile_failure(self, mock_get):
-        mock_get.side_effect = Exception("Network error")
+    @patch('generate_map.download_tile_content')
+    def test_download_tile_failure(self, mock_content):
+        # Mock failure (e.g. 404 or other error returning None)
+        mock_content.return_value = None
         
         result = download_tile("http://example.com/tile.png")
         self.assertIsNone(result)
@@ -69,7 +67,7 @@ class TestMapGenerator(unittest.TestCase):
         mock_download.return_value = dummy_tile
         
         # Test zoom 1 (2x2 tiles)
-        generate_map(zoom=1, map_type="esri", projection="mercator", output_file="test.png")
+        generate_map(zoom=1, map_type="esri", projection="mercator", output_path="test.png")
         
         # Should have tried to download 4 tiles
         self.assertEqual(mock_download.call_count, 4)
@@ -83,7 +81,7 @@ class TestMapGenerator(unittest.TestCase):
         mock_download.return_value = dummy_tile
         mock_reproject.return_value = Image.new('RGB', (100, 50))
         
-        generate_map(zoom=0, map_type="esri", projection="winkel_tripel", output_file="test.png")
+        generate_map(zoom=0, map_type="esri", projection="winkel_tripel", output_path="test.png")
         
         mock_reproject.assert_called_once()
         mock_save.assert_called_once_with("test.png")
