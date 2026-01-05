@@ -106,19 +106,21 @@ def reproject_to_winkel_tripel(mercator_image):
     lat = yv
     
     def forward(lons, lats):
-        alpha = np.arccos(np.clip(np.cos(lats) * np.cos(lons / 2.0), -1, 1))
-        # sinc(alpha) = sin(alpha)/alpha
-        # we need alpha/sin(alpha)
+        # Clip internally for stability in arccos/sin
+        lons_c = np.clip(lons, -math.pi, math.pi)
+        lats_c = np.clip(lats, -math.pi/2, math.pi/2)
+        
+        alpha = np.arccos(np.clip(np.cos(lats_c) * np.cos(lons_c / 2.0), -1, 1))
         sinc_inv = np.ones_like(alpha)
         mask = np.abs(alpha) > 1e-8
         sinc_inv[mask] = alpha[mask] / np.sin(alpha[mask])
         
-        fx = 0.5 * (lons * math.cos(phi1) + (2.0 * np.cos(lats) * np.sin(lons / 2.0)) * sinc_inv)
-        fy = 0.5 * (lats + np.sin(lats) * sinc_inv)
+        fx = 0.5 * (lons_c * math.cos(phi1) + (2.0 * np.cos(lats_c) * np.sin(lons_c / 2.0)) * sinc_inv)
+        fy = 0.5 * (lats_c + np.sin(lats_c) * sinc_inv)
         return fx, fy
 
-    # 5 iterations of Newton's method is usually plenty for this projection
-    for _ in range(5):
+    # Newton's method
+    for _ in range(8): # Increased iterations slightly for better edge convergence
         cx, cy = forward(lon, lat)
         
         # Numerical Jacobian
@@ -132,28 +134,37 @@ def reproject_to_winkel_tripel(mercator_image):
         dy_dlat = (y_dlat - cy) / delta
         
         det = dx_dlon * dy_dlat - dx_dlat * dy_dlon
+        # Avoid division by zero
+        det[np.abs(det) < 1e-12] = 1e-12
+        
         err_x = cx - xv
         err_y = cy - yv
         
         lon -= (err_x * dy_dlat - err_y * dx_dlat) / det
         lat -= (err_y * dx_dlon - err_x * dy_dlon) / det
-        
-        lon = np.clip(lon, -math.pi, math.pi)
-        lat = np.clip(lat, -math.pi/2, math.pi/2)
 
-    # Map lon/lat to Mercator pixels
-    # lon is in [-pi, pi], lat is in [-max_lat_rad, max_lat_rad]
-    valid_mask = np.abs(lat) <= max_lat_rad
+    # Valid mask: point must be within world bounds and within Mercator range
+    # Handle NaNs that might arise from divergent iterations
+    lon = np.nan_to_num(lon, nan=1e9)
+    lat = np.nan_to_num(lat, nan=1e9)
     
-    # Clip lat to avoid log(tan(0 or pi/2)) errors
+    # Use a small epsilon to avoid edge artifacts
+    eps = 1e-4
+    valid_mask = (np.abs(lon) <= math.pi + eps) & (np.abs(lat) <= math.pi/2 + eps)
+    
+    # Further restrict to Mercator latitude range
+    valid_mask &= (np.abs(lat) <= max_lat_rad)
+    
+    # Map lon/lat to Mercator pixels
     safe_lat = np.clip(lat, -max_lat_rad, max_lat_rad)
     merc_y = np.log(np.tan(math.pi / 4.0 + safe_lat / 2.0))
     
     input_y = np.zeros_like(merc_y, dtype=int)
     input_x = np.zeros_like(lon, dtype=int)
     
+    # Normalize lon for input_x (Mercator is linear in longitude)
     input_y[valid_mask] = ((math.pi - merc_y[valid_mask]) / (2.0 * math.pi) * (h - 1)).astype(int)
-    input_x[valid_mask] = ((lon[valid_mask] + math.pi) / (2.0 * math.pi) * (w - 1)).astype(int)
+    input_x[valid_mask] = (((lon[valid_mask] + math.pi) % (2*math.pi)) / (2.0 * math.pi) * (w - 1)).astype(int)
     
     # Clip to be safe
     input_y = np.clip(input_y, 0, h - 1)
