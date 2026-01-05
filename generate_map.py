@@ -101,6 +101,7 @@ def reproject_to_winkel_tripel(mercator_image):
     phi1 = math.acos(2.0 / math.pi)
     max_lat_rad = math.atan(math.sinh(math.pi))
     
+    # Target grid in normalized coordinates
     x_max = 1.0 + math.pi / 2.0
     y_max = math.pi / 2.0
     
@@ -108,23 +109,28 @@ def reproject_to_winkel_tripel(mercator_image):
     y_coords = np.linspace(y_max, -y_max, out_h)
     xv, yv = np.meshgrid(x_coords, y_coords)
     
-    # Initial guess: Equirectangular
+    # Initial guess: Equirectangular-ish
     lon = xv / math.cos(phi1)
     lat = yv
     
     def forward(lons, lats):
-        lons_c = np.clip(lons, -math.pi, math.pi)
+        # Internal clip for trig stability
         lats_c = np.clip(lats, -math.pi/2, math.pi/2)
-        alpha = np.arccos(np.clip(np.cos(lats_c) * np.cos(lons_c / 2.0), -1, 1))
+        lons_c = np.clip(lons, -math.pi, math.pi)
+        
+        alpha = np.arccos(np.clip(np.cos(lats_c) * np.cos(lons_c / 2.0), -1.0, 1.0))
         sinc_inv = np.ones_like(alpha)
         mask = np.abs(alpha) > 1e-8
         sinc_inv[mask] = alpha[mask] / np.sin(alpha[mask])
-        fx = 0.5 * (lons_c * math.cos(phi1) + (2.0 * np.cos(lats_c) * np.sin(lons_c / 2.0)) * sinc_inv)
-        fy = 0.5 * (lats_c + np.sin(lats_c) * sinc_inv)
+        
+        fx = 0.5 * (lons * math.cos(phi1) + (2.0 * np.cos(lats_c) * np.sin(lons / 2.0)) * sinc_inv)
+        fy = 0.5 * (lats + np.sin(lats_c) * sinc_inv)
         return fx, fy
 
-    for _ in tqdm(range(8), desc="Newton iterations", leave=False):
+    # Newton's method
+    for _ in tqdm(range(10), desc="Newton iterations", leave=False):
         cx, cy = forward(lon, lat)
+        
         delta = 1e-6
         x_dlon, y_dlon = forward(lon + delta, lat)
         x_dlat, y_dlat = forward(lon, lat + delta)
@@ -142,13 +148,19 @@ def reproject_to_winkel_tripel(mercator_image):
         
         lon -= (err_x * dy_dlat - err_y * dx_dlat) / det
         lat -= (err_y * dx_dlon - err_x * dy_dlon) / det
+        
+        # Keep iterations within a reasonable world
+        lon = np.clip(lon, -math.pi * 1.1, math.pi * 1.1)
+        lat = np.clip(lat, -math.pi/2 * 1.1, math.pi/2 * 1.1)
 
-    lon = np.nan_to_num(lon, nan=1e9)
-    lat = np.nan_to_num(lat, nan=1e9)
-    eps = 1e-4
+    # Final mask: points that converged within the world
+    eps = 0.01
     valid_mask = (np.abs(lon) <= math.pi + eps) & (np.abs(lat) <= math.pi/2 + eps)
+    
+    # Further restrict to Mercator range
     valid_mask &= (np.abs(lat) <= max_lat_rad)
     
+    # Map to Mercator pixels
     safe_lat = np.clip(lat, -max_lat_rad, max_lat_rad)
     merc_y = np.log(np.tan(math.pi / 4.0 + safe_lat / 2.0))
     
@@ -156,12 +168,11 @@ def reproject_to_winkel_tripel(mercator_image):
     input_x = np.zeros_like(lon, dtype=int)
     
     input_y[valid_mask] = ((math.pi - merc_y[valid_mask]) / (2.0 * math.pi) * (h - 1)).astype(int)
-    input_x[valid_mask] = (((lon[valid_mask] + math.pi) % (2*math.pi)) / (2.0 * math.pi) * (w - 1)).astype(int)
+    input_x[valid_mask] = (((lon[valid_mask] + math.pi) % (2.0 * math.pi)) / (2.0 * math.pi) * (w - 1)).astype(int)
     
     input_y = np.clip(input_y, 0, h - 1)
     input_x = np.clip(input_x, 0, w - 1)
     
-    # Progress bar for final remapping
     for y in tqdm(range(out_h), desc="Remapping", leave=False):
         row_mask = valid_mask[y, :]
         if np.any(row_mask):
