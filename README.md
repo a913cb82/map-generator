@@ -42,6 +42,16 @@ python generate_map.py 2 --maps esri osm --projections mercator winkel_tripel --
 python generate_map.py 3 --maps google_terrain --projections winkel_tripel --scale 2.0
 ```
 
+## Regenerating maps/
+
+The committed `maps/` set (73 PNGs, ~1.4 GB) was generated with:
+```bash
+python generate_map.py 0 1 2 3 4 5 6 --maps esri googlehybrid googleterrain osm --projections mercator equirectangular winkel_tripel --outdir ./maps --scale 2.0
+```
+Runtime depends on tile-network throughput and CPU; allow generous time for the full set.
+`.cache/` is the `joblib` on-disk cache of downloaded tiles (git-ignored). It speeds up
+regeneration; deleting it is safe and only forces re-downloads.
+
 ## Features
 
 - **High Quality**: Uses bilinear interpolation for smooth reprojection.

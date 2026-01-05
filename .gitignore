@@ -1,6 +1,7 @@
-.venv/
-.env
-.cache/
-*.png
-__pycache__/
 
+*.png
+.cache/
+.env
+.venv/
+__pycache__/
+requirements.snapshot.txt
