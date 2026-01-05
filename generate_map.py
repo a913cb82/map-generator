@@ -4,12 +4,14 @@ import argparse
 import requests
 import math
 import numpy as np
+import itertools
 from PIL import Image
 from io import BytesIO
 from dotenv import load_dotenv
 from tqdm import tqdm
 from joblib import Memory
 from scipy.ndimage import map_coordinates
+from pathlib import Path
 
 # Load environment variables from .env
 load_dotenv()
@@ -76,9 +78,8 @@ def reproject_to_equirectangular(mercator_image, scale=1.0):
     
     output_arr = np.zeros((out_h, out_w, 3), dtype=np.uint8)
     chunk_size = 1024
-    print(f"Reprojecting to Equirectangular ({out_w}x{out_h})...")
     
-    for y_start in tqdm(range(0, out_h, chunk_size), desc="Chunks"):
+    for y_start in tqdm(range(0, out_h, chunk_size), desc="  Reprojecting Equirectangular", leave=False):
         y_end = min(y_start + chunk_size, out_h)
         curr_chunk_h = y_end - y_start
         
@@ -113,8 +114,7 @@ def reproject_to_winkel_tripel(mercator_image, scale=1.0):
     y_max = math.pi / 2.0
     
     chunk_size = 512
-    print(f"Reprojecting to Winkel Tripel ({out_w}x{out_h})...")
-
+    
     def forward(lons, lats):
         lats_c = np.clip(lats, -math.pi/2, math.pi/2)
         lons_c = np.clip(lons, -math.pi, math.pi)
@@ -126,7 +126,7 @@ def reproject_to_winkel_tripel(mercator_image, scale=1.0):
         fy = 0.5 * (lats + np.sin(lats) * sinc_inv)
         return fx, fy
 
-    for y_start in tqdm(range(0, out_h, chunk_size), desc="Chunks"):
+    for y_start in tqdm(range(0, out_h, chunk_size), desc="  Reprojecting Winkel Tripel", leave=False):
         y_end = min(y_start + chunk_size, out_h)
         curr_chunk_h = y_end - y_start
         
@@ -169,28 +169,21 @@ def reproject_to_winkel_tripel(mercator_image, scale=1.0):
             
     return Image.fromarray(output_arr)
 
-def generate_map(zoom, map_type, projection, output_file, scale=1.0):
-    if map_type not in MAP_TEMPLATES:
-        print(f"Unknown map type: {map_type}")
-        return
-
+def generate_map(zoom, map_type, projection, output_path, scale=1.0):
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if map_type.startswith("google_") and not api_key:
-        print(f"Error: GOOGLE_MAPS_API_KEY not found in .env, but required for {map_type}")
+        tqdm.write(f"Error: GOOGLE_MAPS_API_KEY not found in .env, but required for {map_type}")
         return
 
     num_tiles = 2 ** zoom
     tile_size = 256
     full_size = num_tiles * tile_size
 
-    print(f"Generating {map_type} map at zoom level {zoom} with {projection} projection...")
-    print(f"Source size: {full_size}x{full_size} pixels")
-
     canvas = Image.new("RGB", (full_size, full_size))
     template = MAP_TEMPLATES[map_type]
 
     total_tiles = num_tiles * num_tiles
-    with tqdm(total=total_tiles, desc="Downloading tiles") as pbar:
+    with tqdm(total=total_tiles, desc=f"  Downloading {map_type} z{zoom}", leave=False) as pbar:
         for x in range(num_tiles):
             for y in range(num_tiles):
                 url = template.format(z=zoom, x=x, y=y, key=api_key)
@@ -204,23 +197,33 @@ def generate_map(zoom, map_type, projection, output_file, scale=1.0):
     elif projection == "winkel_tripel":
         canvas = reproject_to_winkel_tripel(canvas, scale=scale)
 
-    canvas.save(output_file)
-    print(f"Map saved to {output_file}")
+    canvas.save(output_path)
 
 if __name__ == "__main__":
     map_choices = list(MAP_TEMPLATES.keys())
     proj_choices = ["mercator", "equirectangular", "winkel_tripel"]
     
     parser = argparse.ArgumentParser(
-        description="Generate a full world map to a .png file.",
+        description="Generate full world maps to .png files.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"Available map types:\n  {', '.join(map_choices)}\n\nAvailable projections:\n  {', '.join(proj_choices)}"
     )
-    parser.add_argument("zoom", type=int, help="Zoom level (e.g., 0 to 5)")
-    parser.add_argument("--map", choices=map_choices, default="esri", help="Map type to draw (default: esri)")
-    parser.add_argument("--projection", choices=proj_choices, default="mercator", help="Map projection to use (default: mercator)")
+    parser.add_argument("zooms", type=int, nargs='+', help="Zoom levels (e.g., 0 1 2)")
+    parser.add_argument("--maps", choices=map_choices, nargs='+', default=["esri"], help="Map types to draw")
+    parser.add_argument("--projections", choices=proj_choices, nargs='+', default=["mercator"], help="Map projections to use")
     parser.add_argument("--scale", type=float, default=1.0, help="Output resolution scale factor (default: 1.0)")
-    parser.add_argument("--output", default="world_map.png", help="Output filename (default: world_map.png)")
+    parser.add_argument("--outdir", default=".", help="Output directory (default: current directory)")
 
     args = parser.parse_args()
-    generate_map(args.zoom, args.map, args.projection, args.output, scale=args.scale)
+    
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    
+    tasks = list(itertools.product(args.maps, args.zooms, args.projections))
+    
+    with tqdm(tasks, desc="Total Progress") as pbar:
+        for map_type, zoom, projection in pbar:
+            filename = f"{map_type}_z{zoom}_{projection}.png"
+            output_path = outdir / filename
+            pbar.set_postfix(file=filename)
+            generate_map(zoom, map_type, projection, output_path, scale=args.scale)
