@@ -223,7 +223,9 @@ if __name__ == "__main__":
     
     with tqdm(tasks, desc="Total Progress") as pbar:
         for map_type, zoom, projection in pbar:
-            filename = f"{map_type}_z{zoom}_{projection}_s{args.scale}.png"
+            clean_map = map_type.replace('_', '')
+            clean_proj = projection.replace('_', '')
+            filename = f"{clean_map}_z{zoom}_{clean_proj}_s{args.scale}.png"
             output_path = outdir / filename
             pbar.set_postfix(file=filename)
             generate_map(zoom, map_type, projection, output_path, scale=args.scale)
