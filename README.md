@@ -1,6 +1,6 @@
 # Map Generator
 
-A Python script to generate full world maps by stitching together map tiles from various providers.
+A Python script to generate high-quality world maps by stitching together map tiles from various providers and reprojecting them.
 
 ## Setup
 
@@ -12,33 +12,41 @@ A Python script to generate full world maps by stitching together map tiles from
 
 ## Usage
 
-Run the script with the desired zoom level, map type, and projection.
+The script supports batch generation of multiple map configurations. It generates the full cross-product of all provided arguments.
 
 ```bash
-python generate_map.py <zoom_level> --map <map_type> --projection <projection> --output <filename>
+python generate_map.py <zooms...> --maps <map_types...> --projections <projections...> --outdir <directory> --scale <factor>
 ```
 
 ### Arguments
 
-- `zoom`: The zoom level (e.g., 0 for a single tile, 1 for 2x2, 2 for 4x4, etc.)
-- `--map`: The map provider to use. Use `--help` to see all available types.
-- `--projection`: The map projection to use. Use `--help` to see all available projections.
-- `--output`: The filename for the resulting `.png` (Default: `world_map.png`)
+- `zooms`: One or more zoom levels (e.g., `0 1 2`).
+- `--maps`: One or more map providers. Use `--help` to see all available types.
+- `--projections`: One or more map projections. Use `--help` to see all available projections (e.g., `mercator`, `equirectangular`, `winkel_tripel`).
+- `--outdir`: The directory where generated images will be saved (Default: current directory).
+- `--scale`: Output resolution scale factor (Default: `1.0`). Use `2.0` for double resolution.
+
+### Auto-Naming
+
+Generated files are automatically named using the pattern:
+`{map}_z{zoom}_{projection}_s{scale}.png`
+(Underscores are removed from map and projection names in the final filename).
 
 ### Examples
 
-See `python generate_map.py --help` for more examples.
-
 ```bash
-# Generate a NatGeo map at zoom 2
-python generate_map.py 2 --map esri
+# Generate Esri and OSM maps at zoom level 2 in two projections
+python generate_map.py 2 --maps esri osm --projections mercator winkel_tripel --outdir ./output
 
-# Generate an OSM map at zoom 3
-python generate_map.py 3 --map osm
-
-# Generate an equirectangular map
-python generate_map.py 2 --projection equirectangular
+# Generate a high-resolution Google Terrain map
+python generate_map.py 3 --maps google_terrain --projections winkel_tripel --scale 2.0
 ```
+
+## Features
+
+- **High Quality**: Uses bilinear interpolation for smooth reprojection.
+- **Efficient**: Downloads are cached to disk using `joblib`. Reprojection is memory-efficient and processed in chunks.
+- **Progress Tracking**: Real-time progress bars for downloads and processing.
 
 ## Testing
 
