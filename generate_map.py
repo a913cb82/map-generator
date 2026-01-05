@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 from io import BytesIO
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 # Load environment variables from .env
 load_dotenv()
@@ -29,8 +30,8 @@ def download_tile(url):
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         return Image.open(BytesIO(response.content))
-    except Exception as e:
-        print(f"Error downloading tile {url}: {e}")
+    except Exception:
+        # Silently fail here to keep progress bar clean
         return None
 
 def reproject_to_equirectangular(mercator_image):
@@ -68,7 +69,7 @@ def reproject_to_equirectangular(mercator_image):
     input_x_vals = np.arange(out_w)
     
     # Fill output
-    for y in range(out_h):
+    for y in tqdm(range(out_h), desc="Reprojecting", leave=False):
         if not valid_mask[y]:
             continue
         output_arr[y, :, :] = input_arr[input_y_vals[y], input_x_vals, :]
@@ -120,7 +121,7 @@ def reproject_to_winkel_tripel(mercator_image):
         return fx, fy
 
     # Newton's method
-    for _ in range(8): # Increased iterations slightly for better edge convergence
+    for _ in tqdm(range(8), desc="Newton iterations", leave=False):
         cx, cy = forward(lon, lat)
         
         # Numerical Jacobian
@@ -190,19 +191,20 @@ def generate_map(zoom, map_type, projection, output_file):
     full_size = num_tiles * tile_size
 
     print(f"Generating {map_type} map at zoom level {zoom} with {projection} projection...")
-    print(f"Fetching {num_tiles}x{num_tiles} tiles...")
+    print(f"Resulting image size: {full_size}x{full_size} pixels")
 
     canvas = Image.new("RGB", (full_size, full_size))
     template = MAP_TEMPLATES[map_type]
 
-    for x in range(num_tiles):
-        for y in range(num_tiles):
-            url = template.format(z=zoom, x=x, y=y, key=api_key)
-            tile = download_tile(url)
-            if tile:
-                canvas.paste(tile, (x * tile_size, y * tile_size))
-            else:
-                print(f"Skipping tile {x},{y}")
+    total_tiles = num_tiles * num_tiles
+    with tqdm(total=total_tiles, desc="Downloading tiles") as pbar:
+        for x in range(num_tiles):
+            for y in range(num_tiles):
+                url = template.format(z=zoom, x=x, y=y, key=api_key)
+                tile = download_tile(url)
+                if tile:
+                    canvas.paste(tile, (x * tile_size, y * tile_size))
+                pbar.update(1)
 
     if projection == "equirectangular":
         print("Reprojecting to Equirectangular...")

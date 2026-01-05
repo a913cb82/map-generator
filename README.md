@@ -7,7 +7,7 @@ A Python script to generate full world maps by stitching together map tiles from
 1. Ensure you have a `.env` file with your `GOOGLE_MAPS_API_KEY` (if using Google Maps layers).
 2. Install dependencies:
    ```bash
-   pip install requests Pillow python-dotenv numpy
+   pip install -r requirements.txt
    ```
 
 ## Usage
@@ -38,4 +38,11 @@ python generate_map.py 3 --map osm
 
 # Generate an equirectangular map
 python generate_map.py 2 --projection equirectangular
+```
+
+## Testing
+
+Run the unit tests:
+```bash
+python test_generate_map.py
 ```
