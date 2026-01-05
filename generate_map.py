@@ -56,15 +56,14 @@ def high_quality_remap(input_arr, input_y, input_x, valid_mask, out_shape):
     """
     Perform high-quality remapping using bilinear interpolation.
     """
-    out_h, out_w = out_shape[:2]
     output_arr = np.zeros(out_shape, dtype=np.uint8)
     coords = np.array([input_y, input_x])
     
     for i in range(3):
         channel = map_coordinates(input_arr[:, :, i], coords, order=1, mode='constant', cval=0)
-        output_arr[:, :, i] = channel.reshape(out_h, out_w)
+        output_arr[:, :, i] = channel.reshape(out_shape[:2])
         
-    output_arr[~valid_mask.reshape(out_h, out_w)] = 0
+    output_arr[~valid_mask.reshape(out_shape[:2])] = 0
     return output_arr
 
 def reproject_to_equirectangular(mercator_image, scale=1.0):
@@ -75,20 +74,29 @@ def reproject_to_equirectangular(mercator_image, scale=1.0):
     input_arr = np.array(mercator_image)
     max_lat_rad = math.atan(math.sinh(math.pi))
     
-    x_coords = np.linspace(0, out_w - 1, out_w)
-    y_coords = np.linspace(0, out_h - 1, out_h)
-    xv, yv = np.meshgrid(x_coords, y_coords)
+    output_arr = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+    chunk_size = 1024
+    print(f"Reprojecting to Equirectangular ({out_w}x{out_h})...")
     
-    lats = (0.5 - yv / (out_h - 1)) * math.pi
-    safe_lats = np.clip(lats, -max_lat_rad, max_lat_rad)
-    merc_y = np.log(np.tan(math.pi / 4 + safe_lats / 2))
-    
-    input_y = ((math.pi - merc_y) / (2 * math.pi) * (h - 1))
-    input_x = (xv / (out_w - 1)) * (w - 1)
-    valid_mask = np.abs(lats) <= max_lat_rad
-    
-    print("Reprojecting to Equirectangular (High Quality)...")
-    output_arr = high_quality_remap(input_arr, input_y.ravel(), input_x.ravel(), valid_mask.ravel(), (out_h, out_w, 3))
+    for y_start in tqdm(range(0, out_h, chunk_size), desc="Chunks"):
+        y_end = min(y_start + chunk_size, out_h)
+        curr_chunk_h = y_end - y_start
+        
+        x_coords = np.linspace(0, out_w - 1, out_w)
+        y_coords = np.linspace(y_start, y_end - 1, curr_chunk_h)
+        xv, yv = np.meshgrid(x_coords, y_coords)
+        
+        lats = (0.5 - yv / (out_h - 1)) * math.pi
+        safe_lats = np.clip(lats, -max_lat_rad, max_lat_rad)
+        merc_y = np.log(np.tan(math.pi / 4 + safe_lats / 2))
+        
+        input_y = ((math.pi - merc_y) / (2 * math.pi) * (h - 1))
+        input_x = (xv / (out_w - 1)) * (w - 1)
+        valid_mask = np.abs(lats) <= max_lat_rad
+        
+        chunk_out = high_quality_remap(input_arr, input_y.ravel(), input_x.ravel(), valid_mask.ravel(), (curr_chunk_h, out_w, 3))
+        output_arr[y_start:y_end, :, :] = chunk_out
+        
     return Image.fromarray(output_arr)
 
 def reproject_to_winkel_tripel(mercator_image, scale=1.0):
@@ -100,15 +108,13 @@ def reproject_to_winkel_tripel(mercator_image, scale=1.0):
     phi1 = math.acos(2.0 / math.pi)
     max_lat_rad = math.atan(math.sinh(math.pi))
     
+    output_arr = np.zeros((out_h, out_w, 3), dtype=np.uint8)
     x_max = 1.0 + math.pi / 2.0
     y_max = math.pi / 2.0
-    x_coords = np.linspace(-x_max, x_max, out_w)
-    y_coords = np.linspace(y_max, -y_max, out_h)
-    xv, yv = np.meshgrid(x_coords, y_coords)
     
-    lon = 2.0 * xv / (1.0 + math.cos(phi1))
-    lat = yv
-    
+    chunk_size = 512
+    print(f"Reprojecting to Winkel Tripel ({out_w}x{out_h})...")
+
     def forward(lons, lats):
         lats_c = np.clip(lats, -math.pi/2, math.pi/2)
         lons_c = np.clip(lons, -math.pi, math.pi)
@@ -120,33 +126,47 @@ def reproject_to_winkel_tripel(mercator_image, scale=1.0):
         fy = 0.5 * (lats + np.sin(lats) * sinc_inv)
         return fx, fy
 
-    for _ in tqdm(range(10), desc="Newton iterations", leave=False):
-        cx, cy = forward(lon, lat)
-        delta = 1e-6
-        x_dlon, y_dlon = forward(lon + delta, lat)
-        x_dlat, y_dlat = forward(lon, lat + delta)
-        dx_dlon = (x_dlon - cx) / delta
-        dx_dlat = (x_dlat - cx) / delta
-        dy_dlon = (y_dlon - cy) / delta
-        dy_dlat = (y_dlat - cy) / delta
-        det = dx_dlon * dy_dlat - dx_dlat * dy_dlon
-        det[np.abs(det) < 1e-12] = 1e-12
-        lon -= (cx - xv) * dy_dlat / det - (cy - yv) * dx_dlat / det
-        lat -= (cy - yv) * dx_dlon / det - (cx - xv) * dy_dlon / det
-        lon = np.clip(lon, -math.pi * 1.1, math.pi * 1.1)
-        lat = np.clip(lat, -math.pi/2 * 1.1, math.pi/2 * 1.1)
+    for y_start in tqdm(range(0, out_h, chunk_size), desc="Chunks"):
+        y_end = min(y_start + chunk_size, out_h)
+        curr_chunk_h = y_end - y_start
+        
+        x_coords = np.linspace(-x_max, x_max, out_w)
+        y_coords = np.linspace(y_max - (y_start / (out_h - 1)) * 2 * y_max, 
+                               y_max - ((y_end - 1) / (out_h - 1)) * 2 * y_max, 
+                               curr_chunk_h)
+        xv, yv = np.meshgrid(x_coords, y_coords)
+        
+        lon = 2.0 * xv / (1.0 + math.cos(phi1))
+        lat = yv
+        
+        for _ in range(10):
+            cx, cy = forward(lon, lat)
+            delta = 1e-6
+            x_dlon, y_dlon = forward(lon + delta, lat)
+            x_dlat, y_dlat = forward(lon, lat + delta)
+            dx_dlon = (x_dlon - cx) / delta
+            dx_dlat = (x_dlat - cx) / delta
+            dy_dlon = (y_dlon - cy) / delta
+            dy_dlat = (y_dlat - cy) / delta
+            det = dx_dlon * dy_dlat - dx_dlat * dy_dlon
+            det[np.abs(det) < 1e-12] = 1e-12
+            lon -= (cx - xv) * dy_dlat / det - (cy - yv) * dx_dlat / det
+            lat -= (cy - yv) * dx_dlon / det - (cx - xv) * dy_dlon / det
+            lon = np.clip(lon, -math.pi * 1.1, math.pi * 1.1)
+            lat = np.clip(lat, -math.pi/2 * 1.1, math.pi/2 * 1.1)
 
-    eps = 0.05
-    valid_mask = (np.abs(lon) <= math.pi + eps) & (np.abs(lat) <= math.pi/2 + eps)
-    valid_mask &= (np.abs(lat) <= max_lat_rad)
-    
-    safe_lat = np.clip(lat, -max_lat_rad, max_lat_rad)
-    merc_y = np.log(np.tan(math.pi / 4.0 + safe_lat / 2.0))
-    input_y = ((math.pi - merc_y) / (2.0 * math.pi) * (h - 1))
-    input_x = (((lon + math.pi) % (2.0 * math.pi)) / (2.0 * math.pi) * (w - 1))
-    
-    print("Reprojecting to Winkel Tripel (High Quality)...")
-    output_arr = high_quality_remap(input_arr, input_y.ravel(), input_x.ravel(), valid_mask.ravel(), (out_h, out_w, 3))
+        eps = 0.05
+        valid_mask = (np.abs(lon) <= math.pi + eps) & (np.abs(lat) <= math.pi/2 + eps)
+        valid_mask &= (np.abs(lat) <= max_lat_rad)
+        
+        safe_lat = np.clip(lat, -max_lat_rad, max_lat_rad)
+        merc_y = np.log(np.tan(math.pi / 4.0 + safe_lat / 2.0))
+        input_y = ((math.pi - merc_y) / (2 * math.pi) * (h - 1))
+        input_x = (((lon + math.pi) % (2.0 * math.pi)) / (2.0 * math.pi) * (w - 1))
+        
+        chunk_out = high_quality_remap(input_arr, input_y.ravel(), input_x.ravel(), valid_mask.ravel(), (curr_chunk_h, out_w, 3))
+        output_arr[y_start:y_end, :, :] = chunk_out
+            
     return Image.fromarray(output_arr)
 
 def generate_map(zoom, map_type, projection, output_file, scale=1.0):
