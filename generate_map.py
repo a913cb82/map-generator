@@ -12,7 +12,11 @@ load_dotenv()
 MAP_TEMPLATES = {
     "esri": "https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}",
     "osm": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    "google_terrain": "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&key={key}"
+    "osm_hot": "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+    "google_maps": "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&key={key}",
+    "google_terrain": "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&key={key}",
+    "google_satellite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}&key={key}",
+    "google_hybrid": "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&key={key}",
 }
 
 def download_tile(url):
@@ -33,8 +37,8 @@ def generate_map(zoom, map_type, output_file):
         return
 
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
-    if map_type == "google_terrain" and not api_key:
-        print("Error: GOOGLE_MAPS_API_KEY not found in .env")
+    if map_type.startswith("google_") and not api_key:
+        print(f"Error: GOOGLE_MAPS_API_KEY not found in .env, but required for {map_type}")
         return
 
     num_tiles = 2 ** zoom
@@ -65,18 +69,22 @@ def generate_map(zoom, map_type, output_file):
     print(f"Map saved to {output_file}")
 
 if __name__ == "__main__":
+    map_choices = list(MAP_TEMPLATES.keys())
+    epilog_examples = "\n".join([f"  python generate_map.py 2 --map {m}" for m in map_choices[:3]])
+    
     parser = argparse.ArgumentParser(
         description="Generate a full world map to a .png file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
+Available map types:
+  {', '.join(map_choices)}
+
 Examples:
-  python generate_map.py 2 --map esri
-  python generate_map.py 3 --map osm
-  python generate_map.py 2 --map google_terrain
+{epilog_examples}
         """
     )
     parser.add_argument("zoom", type=int, help="Zoom level (e.g., 0 to 5)")
-    parser.add_argument("--map", choices=MAP_TEMPLATES.keys(), default="esri", 
+    parser.add_argument("--map", choices=map_choices, default="esri", 
                         help="Map type to draw (default: esri)")
     parser.add_argument("--output", default="world_map.png", help="Output filename (default: world_map.png)")
 
